@@ -1,0 +1,9 @@
+cryptography
+pycryptodome
+PyQt5
+binwalk
+Pillow
+pyzbar
+py7zr
+rarfile
+requests
