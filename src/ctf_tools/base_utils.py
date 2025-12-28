@@ -4,6 +4,8 @@ import gzip
 import string
 from typing import Dict, Tuple, Callable
 
+from .utils import decode_bytes_best_effort
+
 BASE91_ALPHABET = (
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
     "!#$%&()*+,./:;<=>?@[]^_`{|}~\""
@@ -229,9 +231,9 @@ def base64_to_hex(text: str) -> str:
 def base64_decompress(text: str) -> str:
     raw = base64.b64decode(text)
     try:
-        return zlib.decompress(raw).decode("latin-1")
+        return decode_bytes_best_effort(zlib.decompress(raw))
     except Exception:
-        return gzip.decompress(raw).decode("latin-1")
+        return decode_bytes_best_effort(gzip.decompress(raw))
 
 
 def base100_encode(data: bytes) -> str:
@@ -249,6 +251,7 @@ BaseCodec = Tuple[Callable[[bytes], str], Callable[[str], bytes]]
 def registry() -> Dict[str, BaseCodec]:
     return {
         "base16": (lambda b: b.hex(), lambda s: bytes.fromhex(s)),
+        "hex": (lambda b: b.hex(), lambda s: bytes.fromhex(s)),
         "base32": (lambda b: base64.b32encode(b).decode("ascii"), lambda s: base64.b32decode(s)),
         "base36": (lambda b: base36_encode(b), lambda s: base36_decode(s)),
         "base45": (lambda b: base45_encode(b), base45_decode),

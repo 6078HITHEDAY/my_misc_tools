@@ -16,6 +16,7 @@ from .encoders import (
     html_entity_decode,
 )
 from .classical import rot13, atbash
+from .base_utils import base45_decode, base62_decode, base91_decode
 
 
 class AutoDecodeResult(Tuple[str, str]):
@@ -45,6 +46,13 @@ def _is_hex(text: str) -> bool:
         return False
 
 
+def _safe_decode_bytes(data: bytes) -> str:
+    try:
+        return data.decode("utf-8")
+    except Exception:
+        return data.decode("latin-1", errors="ignore")
+
+
 def auto_decode(text: str) -> List[AutoDecodeResult]:
     """
     Try several lightweight decoders and return successful candidates.
@@ -62,6 +70,14 @@ def auto_decode(text: str) -> List[AutoDecodeResult]:
     if _is_base32(text):
         try:
             candidates.append(("base32", base32_decode(text)))
+        except Exception:
+            pass
+
+    # Base45 (URL-safe set with space and $%*+-./:)
+    if all(ch in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:" for ch in text.strip()):
+        try:
+            decoded_bytes = base45_decode(text)
+            candidates.append(("base45", _safe_decode_bytes(decoded_bytes)))
         except Exception:
             pass
 
@@ -101,6 +117,24 @@ def auto_decode(text: str) -> List[AutoDecodeResult]:
         try:
             decoded = base58_decode(text)
             candidates.append(("base58", decoded))
+        except Exception:
+            pass
+
+    # Base62 (alnum only)
+    if text and text.isalnum():
+        try:
+            decoded_bytes = base62_decode(text)
+            candidates.append(("base62", _safe_decode_bytes(decoded_bytes)))
+        except Exception:
+            pass
+
+    # Base91 (broad charset, fallback)
+    if 4 <= len(text) <= 200:  # avoid spamming on very long text
+        try:
+            decoded_bytes = base91_decode(text)
+            decoded_str = _safe_decode_bytes(decoded_bytes)
+            if decoded_str != text:
+                candidates.append(("base91", decoded_str))
         except Exception:
             pass
 

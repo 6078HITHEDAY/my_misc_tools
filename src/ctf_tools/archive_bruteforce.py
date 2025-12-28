@@ -3,10 +3,22 @@ import string
 from dataclasses import dataclass
 from itertools import chain, product
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, Optional, Tuple
+from typing import Callable, Iterable, Iterator, Optional, Tuple, List
 
 DEFAULT_SYMBOLS = "!@#$%^&*"
 PRINTABLE = "".join(chr(i) for i in range(32, 127))
+DEFAULT_COMMON_PASSWORDS = [
+    "123456",
+    "123456789",
+    "1234",
+    "111111",
+    "abc123",
+    "password",
+    "12345",
+    "000000",
+    "1q2w3e4r",
+    "qwerty",
+]
 
 ProgressCallback = Callable[[int, Optional[int]], None]
 
@@ -67,11 +79,104 @@ def generate_passwords(min_length: int, max_length: int, charset: str) -> Iterat
             yield "".join(combo)
 
 
+def _generate_numeric_passwords(min_length: int, max_length: int) -> Iterator[str]:
+    """
+    Specialized fast generator for numeric-only passwords; uses range + zfill
+    to avoid Cartesian product overhead.
+    """
+    if min_length < 1 or max_length < min_length:
+        raise ValueError("Invalid length range for brute-force generation.")
+    for length in range(min_length, max_length + 1):
+        upper = 10**length
+        for num in range(0, upper):
+            yield str(num).zfill(length)
+
+
 def _count_generated(min_length: int, max_length: int, charset_size: int) -> int:
     total = 0
     for length in range(min_length, max_length + 1):
         total += charset_size**length
     return total
+
+
+def _build_candidate_sources(
+    dictionary_file: Optional[str],
+    dictionary: Optional[Iterable[str]],
+    include_generated: bool,
+    min_length: int,
+    max_length: int,
+    charset: Optional[str],
+    with_upper: bool,
+    with_symbols: bool,
+    with_space: bool,
+    printable: bool,
+    use_common: bool,
+    common_passwords: Optional[Iterable[str]],
+    common_first: bool,
+) -> Tuple[List[Tuple[str, Iterator[str], Optional[int]]], int]:
+    """
+    Build candidate iterators along with their approximate counts.
+    """
+    sources: List[Tuple[str, Iterator[str], Optional[int]]] = []
+    total_attempts = 0
+
+    def _push(name: str, it: Iterator[str], count: Optional[int]) -> None:
+        nonlocal sources, total_attempts
+        sources.append((name, it, count))
+        if count:
+            total_attempts += count
+
+    if dictionary_file:
+        dict_path = Path(dictionary_file)
+        if not dict_path.exists():
+            raise FileNotFoundError(f"Dictionary file not found: {dictionary_file}")
+        # Count lines for progress (second pass for actual iteration).
+        dict_count = sum(1 for _ in _iter_dict_file(dict_path))
+        _push("dictionary_file", _iter_dict_file(dict_path), dict_count)
+
+    if dictionary:
+        source_iter = (pwd.strip() for pwd in dictionary if pwd)
+        dict_len: Optional[int] = None
+        try:
+            dict_len = len(dictionary)  # type: ignore[arg-type]
+        except Exception:
+            dict_len = None
+        _push("dictionary_iter", source_iter, dict_len)
+
+    common_iter: Optional[Iterator[str]] = None
+    if use_common:
+        if common_passwords:
+            common_iter = (pwd.strip() for pwd in common_passwords if pwd)
+        else:
+            common_iter = (pwd for pwd in DEFAULT_COMMON_PASSWORDS)
+        common_count = None
+        try:
+            common_count = len(common_passwords) if common_passwords is not None else len(DEFAULT_COMMON_PASSWORDS)  # type: ignore[arg-type]
+        except Exception:
+            common_count = None
+        if common_first:
+            _push("common", common_iter, common_count)
+
+    if include_generated:
+        final_charset = charset or build_charset(
+            use_digits=True,
+            use_lower=True,
+            use_upper=with_upper,
+            use_symbols=with_symbols,
+            use_space=with_space,
+            use_printable=printable,
+        )
+        gen_total = _count_generated(min_length, max_length, len(final_charset))
+        if set(final_charset) == set(string.digits):
+            generator = _generate_numeric_passwords(min_length, max_length)
+            _push("numeric", generator, gen_total)
+        else:
+            _push("generated", generate_passwords(min_length, max_length, final_charset), gen_total)
+
+    if use_common and common_iter and not common_first:
+        _push("common", common_iter, common_count)
+
+    return sources, total_attempts
 
 
 def _iter_dict_file(path: Path) -> Iterator[str]:
@@ -197,7 +302,7 @@ class _RarHandler(_BaseArchiveHandler):
             self._rf.setpassword(password)
             self._rf.read(self._members[0])
             return True
-        except self._rarfile.RarWrongPassword:
+        except (self._rarfile.RarWrongPassword, self._rarfile.Error):
             return False
 
     def extract_all(self, password: str, output_dir: Optional[Path]) -> str:
@@ -237,6 +342,9 @@ def brute_force_archive(
     with_symbols: bool = False,
     with_space: bool = False,
     printable: bool = False,
+    use_common: bool = True,
+    common_passwords: Optional[Iterable[str]] = None,
+    common_first: bool = True,
     progress_callback: Optional[ProgressCallback] = None,
     progress_interval: int = 500,
     extract: bool = False,
@@ -251,35 +359,21 @@ def brute_force_archive(
     archive = Path(archive_path)
     if not archive.exists():
         raise FileNotFoundError(f"Archive not found: {archive}")
-    sources = []
-    total_attempts = 0
-
-    if dictionary_file:
-        dict_path = Path(dictionary_file)
-        if not dict_path.exists():
-            raise FileNotFoundError(f"Dictionary file not found: {dictionary_file}")
-        total_attempts += sum(1 for _ in _iter_dict_file(dict_path))
-        sources.append(_iter_dict_file(dict_path))
-
-    if dictionary:
-        sources.append(pwd.strip() for pwd in dictionary)
-        try:
-            total_attempts += len(dictionary)  # type: ignore[arg-type]
-        except Exception:
-            pass
-
-    if include_generated:
-        final_charset = charset or build_charset(
-            use_digits=True,
-            use_lower=True,
-            use_upper=with_upper,
-            use_symbols=with_symbols,
-            use_space=with_space,
-            use_printable=printable,
-        )
-        total_attempts += _count_generated(min_length, max_length, len(final_charset))
-        sources.append(generate_passwords(min_length, max_length, final_charset))
-
+    sources, total_attempts = _build_candidate_sources(
+        dictionary_file,
+        dictionary,
+        include_generated,
+        min_length,
+        max_length,
+        charset,
+        with_upper,
+        with_symbols,
+        with_space,
+        printable,
+        use_common,
+        common_passwords,
+        common_first,
+    )
     if not sources:
         raise ValueError("No candidate source provided; supply a dictionary or enable brute-force generation.")
 
@@ -289,8 +383,8 @@ def brute_force_archive(
     archive_format = ""
     with _get_handler(archive, target_member) as handler:
         archive_format = handler.format
-        for source in sources:
-            for pwd in source:
+        for _, source_iter, source_total in sources:
+            for pwd in source_iter:
                 if not pwd:
                     continue
                 if should_stop and should_stop():

@@ -62,8 +62,6 @@ from . import (
     atbash,
     vigenere_encrypt,
     vigenere_decrypt,
-    brute_force_archive,
-    DEFAULT_SYMBOLS,
     simple_replace,
     detect_zip_pseudo_encryption,
     binwalk_extract,
@@ -72,6 +70,8 @@ from . import (
     to_upper,
     url_decode,
     url_encode,
+    decode_bytes_best_effort,
+    pyi_unpack,
 )
 from .base_utils import registry as base_registry, base64_to_hex, base64_decompress
 from .history import log_event
@@ -108,7 +108,11 @@ def _load_text(args: argparse.Namespace) -> str:
     if args.in_file:
         with open(args.in_file, "rb") as fh:
             content = fh.read()
-        return content.decode("latin-1")
+        preferred = getattr(args, "encoding", None)
+        if not preferred:
+            enc_guess = detect_encoding_via_file(Path(args.in_file))
+            preferred = enc_guess or None
+        return decode_bytes_best_effort(content, preferred_encoding=preferred)
     return args.text
 
 
@@ -137,61 +141,6 @@ def _maybe_write_output(args: argparse.Namespace, output: str) -> None:
         },
     )
 
-def _print_progress(attempts: int, total: Optional[int]) -> None:
-    if total:
-        pct = attempts / total * 100
-        print(f"\r尝试 {attempts}/{total} ({pct:.2f}%)", end="", flush=True)
-    else:
-        print(f"\r尝试 {attempts}", end="", flush=True)
-
-
-def _run_archive_bruteforce(args: argparse.Namespace) -> str:
-    used_progress = False
-
-    def progress_cb(done: int, total: Optional[int]) -> None:
-        nonlocal used_progress
-        used_progress = True
-        _print_progress(done, total)
-
-    def run_one(path: str) -> str:
-        result = brute_force_archive(
-            path,
-            dictionary_file=args.dict,
-            include_generated=not args.dict_only,
-            min_length=args.min_length,
-            max_length=args.max_length,
-            charset=args.chars,
-            with_upper=args.with_upper,
-            with_symbols=args.with_symbols,
-            with_space=args.with_space,
-            printable=args.printable,
-            progress_callback=None if args.no_progress else progress_cb,
-            progress_interval=args.progress_interval,
-            extract=args.extract,
-            output_dir=args.out_dir,
-            target_member=args.member,
-        )
-        if used_progress:
-            print()
-        if result:
-            msg = f"{path}: 成功，密码: {result.password} (尝试 {result.attempts} 次)"
-            if result.extracted_to:
-                msg += f"；已解压到 {result.extracted_to}"
-            return msg
-        return f"{path}: 未找到有效密码"
-
-    if args.batch_dir:
-        import glob
-
-        outputs = []
-        for entry in glob.glob(f"{args.batch_dir}/*"):
-            if entry.lower().endswith((".zip", ".7z", ".7zip", ".rar")):
-                outputs.append(run_one(entry))
-        return "\n".join(outputs) if outputs else "目录下未找到压缩包"
-    else:
-        return run_one(args.file)
-
-
 def _run_base_multi(args: argparse.Namespace) -> str:
     codecs = base_registry()
     variant = args.type
@@ -205,12 +154,11 @@ def _run_base_multi(args: argparse.Namespace) -> str:
         raise ValueError(f"Unsupported base type: {variant}")
     enc, dec = codecs[variant]
     if args.mode == "encode":
-        data = text.encode("latin-1")
-        return enc(data)
+        return enc(text.encode("utf-8", errors="replace"))
     data_bytes = dec(text)
     if args.to_hex:
         return data_bytes.hex()
-    return data_bytes.decode("latin-1")
+    return decode_bytes_best_effort(data_bytes, preferred_encoding=getattr(args, "encoding", None))
 
 
 def _run_ai_config(args: argparse.Namespace) -> str:
@@ -273,7 +221,11 @@ def _load_cipher_from_args(args: argparse.Namespace) -> str:
         if not os.path.exists(args.file):
             raise argparse.ArgumentTypeError(f"文件不存在: {args.file}")
         with open(args.file, "rb") as fh:
-            return fh.read().decode("latin-1")
+            preferred = getattr(args, "encoding", None)
+            if not preferred:
+                enc_guess = detect_encoding_via_file(Path(args.file))
+                preferred = enc_guess or None
+            return decode_bytes_best_effort(fh.read(), preferred_encoding=preferred)
     raise argparse.ArgumentTypeError("需要提供 --cipher 或 --file")
 
 
@@ -318,10 +270,35 @@ def _run_ai_cli(args: argparse.Namespace) -> str:
         return f"AI 调用失败: {exc}"
 
 
+def _run_pyi_unpack(args: argparse.Namespace) -> str:
+    exe_path = Path(args.exe)
+    out_dir = Path(args.out)
+    if args.pyz_only:
+        pyz = exe_path
+    else:
+        info = pyi_unpack.extract_carchive(exe_path, out_dir)
+        pyz_candidates = list(out_dir.glob("**/PYZ-*.pyz"))
+        if not pyz_candidates:
+            return f"解包完成，共 {info['entries']} 个条目，但未找到 PYZ 文件。"
+        pyz = pyz_candidates[0]
+    key_bytes = args.key.encode("utf-8") if args.key else None
+    pyz_out = out_dir / "pyz_contents"
+    try:
+        res = pyi_unpack.unpack_pyz(pyz, pyz_out, key=key_bytes)
+        msg = f"PYZ 解包完成: {res['extracted']}/{res['entries']}，失败 {res['failed']}，输出: {pyz_out}"
+    except Exception as exc:  # pragma: no cover - best effort path
+        msg = f"PYZ 解包失败: {exc}"
+    return msg
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Lightweight CTF helper toolkit.")
     parser.add_argument(
         "--no-history", action="store_true", help="Do not record the operation in history."
+    )
+    parser.add_argument(
+        "--encoding",
+        help="输入文本/文件编码，默认自动尝试 utf-8/gb18030/big5/shift_jis/cp1252/latin-1。",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -618,7 +595,7 @@ def build_parser() -> argparse.ArgumentParser:
             data_bytes = data_str.encode("utf-8")
         if args.guess:
             key, plain = xor_bruteforce_single_byte(data_bytes)
-            return f"猜测密钥: {key:02x}, 明文: {plain.decode('latin-1')}"
+            return f"猜测密钥: {key:02x}, 明文: {decode_bytes_best_effort(plain, preferred_encoding=getattr(args, 'encoding', None))}"
         if not args.key:
             raise argparse.ArgumentTypeError("需要提供 --key 或使用 --guess")
         return xor_cipher(
@@ -723,47 +700,19 @@ def build_parser() -> argparse.ArgumentParser:
         func=lambda args: print(detect_zip_pseudo_encryption(args.zipfile))
     )
 
-    arch_parser = subparsers.add_parser("archbrute", help="压缩包爆破 (ZIP/7Z/RAR)")
-    arch_parser.add_argument("file", help="Archive path (.zip/.7z/.rar).")
-    arch_parser.add_argument("--dict", help="自定义密码字典文件（txt，每行一条）。")
-    arch_parser.add_argument(
-        "--dict-only", action="store_true", help="仅使用字典，不生成数字/字母/符号组合。"
-    )
-    arch_parser.add_argument("--min-length", type=int, default=1, help="生成密码最小长度。")
-    arch_parser.add_argument("--max-length", type=int, default=4, help="生成密码最大长度。")
-    arch_parser.add_argument(
-        "--chars", help="自定义字符集；提供后覆盖数字/字母/符号设置。"
-    )
-    arch_parser.add_argument(
-        "--with-upper", action="store_true", help="生成组合时包含大写字母。"
-    )
-    arch_parser.add_argument(
-        "--with-space", action="store_true", help="生成组合时包含空格。"
-    )
-    arch_parser.add_argument(
-        "--with-symbols",
-        action="store_true",
-        help=f"生成组合时包含常用符号（默认符号: {DEFAULT_SYMBOLS}）。",
-    )
-    arch_parser.add_argument(
-        "--printable", action="store_true", help="生成组合时使用全部可打印字符集。"
-    )
-    arch_parser.add_argument(
-        "--progress-interval", type=int, default=500, help="进度刷新频率（尝试次数步长）。"
-    )
-    arch_parser.add_argument("--no-progress", action="store_true", help="不显示实时进度。")
-    arch_parser.add_argument("--extract", action="store_true", help="找到密码后自动解压。")
-    arch_parser.add_argument("--out-dir", help="解压输出目录（可选）。")
-    arch_parser.add_argument("--member", help="仅尝试解密指定文件名（压缩包内）。")
-    arch_parser.add_argument("--batch-dir", help="批量处理目录下所有压缩包。")
-    arch_parser.set_defaults(func=_run_archive_bruteforce)
-
     binwalk_parser = subparsers.add_parser("binwalk", help="调用binwalk基础提取")
     binwalk_parser.add_argument("file", help="File to scan/extract.")
     binwalk_parser.add_argument("--out", help="Output directory.")
     binwalk_parser.set_defaults(
         func=lambda args: print(binwalk_extract(args.file, args.out))
     )
+
+    pyi_parser = subparsers.add_parser("pyi-unpack", help="解包 PyInstaller 可执行文件")
+    pyi_parser.add_argument("exe", help="PyInstaller 打包的 exe 路径")
+    pyi_parser.add_argument("--out", default="pyi_out", help="输出目录（默认 pyi_out）")
+    pyi_parser.add_argument("--pyz-only", action="store_true", help="仅尝试解包已有 PYZ（假设已解出 CArchive）")
+    pyi_parser.add_argument("--key", help="可选，解密 PYZ 的简单 XOR key（字节字符串）")
+    pyi_parser.set_defaults(func=_run_pyi_unpack)
 
     ai_parser = subparsers.add_parser("ai-config", help="AI API 配置管理（支持 OpenAI/Anthropic/千帆）")
     ai_parser.add_argument(

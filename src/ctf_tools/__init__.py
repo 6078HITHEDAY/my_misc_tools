@@ -48,7 +48,7 @@ from .cultural_encodings import (
     core_values_encode,
 )
 from .auto_decoder import auto_decode
-from .base_utils import base64_decompress, base64_to_hex
+from .base_utils import base64_decompress, base64_to_hex, registry as base_registry
 from .hash_bruteforce import brute_force_hash
 from .image_stego import lsb_extract, split_gif_frames, decode_qr
 from .stego_extra import extract_exif, list_png_chunks
@@ -69,15 +69,8 @@ from .misc_tools import (
     xor_cipher,
     xor_bruteforce_single_byte,
 )
-from .archive_bruteforce import (
-    ArchiveCrackResult,
-    brute_force_archive,
-    build_charset,
-    generate_passwords,
-    DEFAULT_SYMBOLS,
-)
 from .stego_tools import binwalk_extract, detect_zip_pseudo_encryption
-from .utils import reverse_string, simple_replace, swap_case, to_lower, to_upper
+from .utils import reverse_string, simple_replace, swap_case, to_lower, to_upper, decode_bytes_best_effort, detect_encoding_via_file
 from .ai_config import (
     AIConfig,
     ProviderConfig,
@@ -106,6 +99,7 @@ __all__ = [
     "base85_decode",
     "base64_decompress",
     "base64_to_hex",
+    "base_registry",
     "url_decode",
     "url_encode",
     "html_entity_encode",
@@ -162,11 +156,8 @@ __all__ = [
     "to_lower",
     "swap_case",
     "simple_replace",
-    "ArchiveCrackResult",
-    "brute_force_archive",
-    "build_charset",
-    "generate_passwords",
-    "DEFAULT_SYMBOLS",
+    "decode_bytes_best_effort",
+    "detect_encoding_via_file",
     "AIConfig",
     "ProviderConfig",
     "load_ai_config",

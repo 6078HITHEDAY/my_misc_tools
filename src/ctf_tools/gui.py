@@ -56,14 +56,13 @@ from . import (
     atbash,
     hex_to_ascii,
     bin_to_ascii,
-    brute_force_archive,
-    DEFAULT_SYMBOLS,
     simple_replace,
     swap_case,
     to_lower,
     to_upper,
     url_decode,
     url_encode,
+    decode_bytes_best_effort,
 )
 from .stego_tools import binwalk_extract, detect_zip_pseudo_encryption
 from .base_utils import registry as base_registry
@@ -98,74 +97,6 @@ class FileDropLineEdit(QtWidgets.QLineEdit):
             event.acceptProposedAction()
         else:
             super().dropEvent(event)
-
-
-class ArchiveBruteWorker(QtCore.QThread):
-    progress = QtCore.pyqtSignal(str)
-    finished = QtCore.pyqtSignal(object, bool)
-    error = QtCore.pyqtSignal(str)
-
-    def __init__(
-        self,
-        archive_path: str,
-        dictionary: str,
-        dict_only: bool,
-        min_len: int,
-        max_len: int,
-        charset: str,
-        with_upper: bool,
-        with_symbols: bool,
-        extract: bool,
-        parent=None,
-    ) -> None:
-        super().__init__(parent)
-        self.archive_path = archive_path
-        self.dictionary = dictionary
-        self.dict_only = dict_only
-        self.min_len = min_len
-        self.max_len = max_len
-        self.charset = charset
-        self.with_upper = with_upper
-        self.with_symbols = with_symbols
-        self.extract = extract
-        self._cancelled = False
-
-    def cancel(self) -> None:
-        self._cancelled = True
-
-    def run(self) -> None:
-        try:
-            last_emit = 0.0
-
-            def cb(done: int, total: object) -> None:
-                nonlocal last_emit
-                now = time.time()
-                if now - last_emit < 0.2 and total:
-                    return
-                last_emit = now
-                if total:
-                    pct = done / float(total) * 100
-                    self.progress.emit(f"尝试 {done}/{total} ({pct:.2f}%)")
-                else:
-                    self.progress.emit(f"尝试 {done}")
-
-            result = brute_force_archive(
-                self.archive_path,
-                dictionary_file=self.dictionary or None,
-                include_generated=not self.dict_only,
-                min_length=self.min_len,
-                max_length=self.max_len,
-                charset=self.charset or None,
-                with_upper=self.with_upper,
-                with_symbols=self.with_symbols,
-                progress_callback=cb,
-                progress_interval=200,
-                extract=self.extract,
-                should_stop=lambda: self._cancelled,
-            )
-            self.finished.emit(result, self._cancelled)
-        except Exception as exc:  # pragma: no cover - GUI feedback
-            self.error.emit(str(exc))
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -261,9 +192,13 @@ class MainWindow(QtWidgets.QMainWindow):
         config_form.addRow(QtWidgets.QLabel("模型"), self.ai_tab_model)
         config_form.addRow(btn_row)
 
+        config_ready_hint = QtWidgets.QLabel("已配置 API，可在设置页修改，或点击“修改配置”重新展开。")
+        config_ready_hint.setStyleSheet("color: gray;")
+        config_ready_hint.setVisible(False)
+
         # 任务区域
         task_group = QtWidgets.QGroupBox("AI 辅助分析")
-        task_layout = QtWidgets.QGridLayout(task_group)
+        task_split = QtWidgets.QHBoxLayout(task_group)
         self.ai_task_combo = QtWidgets.QComboBox()
         self.ai_task_combo.addItems(["密文识别/解码", "哈希分析", "隐写建议"])
         self.ai_text_input = QtWidgets.QTextEdit()
@@ -280,24 +215,53 @@ class MainWindow(QtWidgets.QMainWindow):
         run_btn = QtWidgets.QPushButton("执行 AI 分析")
         run_btn.clicked.connect(self._run_ai_tab_analysis)
 
-        task_layout.addWidget(QtWidgets.QLabel("任务类型"), 0, 0)
-        task_layout.addWidget(self.ai_task_combo, 0, 1)
-        task_layout.addWidget(QtWidgets.QLabel("文本输入"), 1, 0)
-        task_layout.addWidget(self.ai_text_input, 1, 1, 2, 3)
-        task_layout.addWidget(QtWidgets.QLabel("提示"), 3, 0)
-        task_layout.addWidget(self.ai_hint_input, 3, 1, 1, 3)
-        task_layout.addWidget(QtWidgets.QLabel("文件"), 4, 0)
+        form_layout = QtWidgets.QGridLayout()
+        form_layout.addWidget(QtWidgets.QLabel("任务类型"), 0, 0)
+        form_layout.addWidget(self.ai_task_combo, 0, 1)
+        form_layout.addWidget(QtWidgets.QLabel("文本输入"), 1, 0)
+        form_layout.addWidget(self.ai_text_input, 1, 1, 2, 3)
+        form_layout.addWidget(QtWidgets.QLabel("提示"), 3, 0)
+        form_layout.addWidget(self.ai_hint_input, 3, 1, 1, 3)
+        form_layout.addWidget(QtWidgets.QLabel("文件"), 4, 0)
         file_layout = QtWidgets.QHBoxLayout()
         file_layout.addWidget(self.ai_file_input)
         file_layout.addWidget(file_btn)
-        task_layout.addLayout(file_layout, 4, 1, 1, 3)
-        task_layout.addWidget(run_btn, 5, 3)
-        task_layout.addWidget(QtWidgets.QLabel("结果"), 6, 0)
-        task_layout.addWidget(self.ai_output, 7, 0, 1, 4)
+        form_layout.addLayout(file_layout, 4, 1, 1, 3)
+        form_layout.addWidget(run_btn, 5, 3)
+
+        task_split.addLayout(form_layout, 3)
+        result_layout = QtWidgets.QVBoxLayout()
+        result_layout.addWidget(QtWidgets.QLabel("结果"))
+        result_layout.addWidget(self.ai_output, 1)
+        task_split.addLayout(result_layout, 2)
+
+        toggle_config_btn = QtWidgets.QPushButton("修改配置")
+        toggle_config_btn.setFlat(True)
+        toggle_config_btn.setMaximumWidth(120)
+
+        def _toggle_config() -> None:
+            vis = not config_group.isVisible()
+            config_group.setVisible(vis)
+            config_ready_hint.setVisible(not vis)
+        toggle_config_btn.clicked.connect(_toggle_config)
 
         layout.addWidget(config_group)
+        layout.addWidget(config_ready_hint)
         layout.addWidget(task_group)
+
+        # 根据当前配置决定是否默认隐藏配置区域，放大分析区域
+        if self._ai_config_ready():
+            config_group.setVisible(False)
+            config_ready_hint.setVisible(True)
+        layout.addWidget(toggle_config_btn)
+
+        layout.setStretchFactor(task_group, 1)
         return widget
+
+    def _ai_config_ready(self) -> bool:
+        provider = self.ai_config.provider
+        cfg = self.ai_config.providers.get(provider)
+        return bool(cfg and cfg.api_key)
 
     def _build_settings_tab(self) -> QtWidgets.QWidget:
         widget = QtWidgets.QWidget()
@@ -363,8 +327,10 @@ class MainWindow(QtWidgets.QMainWindow):
         layout = QtWidgets.QVBoxLayout(widget)
 
         self.input_edit = QtWidgets.QTextEdit()
+        self.input_edit.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
         self.output_edit = QtWidgets.QTextEdit()
         self.output_edit.setReadOnly(True)
+        self.output_edit.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
 
         op_layout = QtWidgets.QHBoxLayout()
         self.op_combo = QtWidgets.QComboBox()
@@ -452,14 +418,23 @@ class MainWindow(QtWidgets.QMainWindow):
         op_layout.addWidget(base_decode_btn)
 
         layout.addLayout(op_layout)
-        layout.addWidget(QtWidgets.QLabel("输入"))
-        layout.addWidget(self.input_edit, 2)
-        layout.addWidget(QtWidgets.QLabel("输出"))
-        layout.addWidget(self.output_edit, 2)
+        io_split = QtWidgets.QHBoxLayout()
+        io_left = QtWidgets.QVBoxLayout()
+        io_left.addWidget(QtWidgets.QLabel("输入"))
+        io_left.addWidget(self.input_edit, 3)
+        io_left.addWidget(QtWidgets.QLabel("输出"))
+        io_left.addWidget(self.output_edit, 3)
+        io_split.addLayout(io_left, 3)
+
+        auto_layout = QtWidgets.QVBoxLayout()
         self.auto_detect_output = QtWidgets.QTextEdit()
         self.auto_detect_output.setReadOnly(True)
-        layout.addWidget(QtWidgets.QLabel("自动识别结果"))
-        layout.addWidget(self.auto_detect_output, 1)
+        self.auto_detect_output.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
+        auto_layout.addWidget(QtWidgets.QLabel("自动识别结果"))
+        auto_layout.addWidget(self.auto_detect_output, 1)
+        io_split.addLayout(auto_layout, 2)
+
+        layout.addLayout(io_split)
         return widget
 
     def _build_crypto_tab(self) -> QtWidgets.QWidget:
@@ -510,84 +485,56 @@ class MainWindow(QtWidgets.QMainWindow):
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(widget)
 
+        # 文件选择
+        file_group = QtWidgets.QGroupBox("文件选择")
+        file_form = QtWidgets.QGridLayout(file_group)
         self.file_path_edit = FileDropLineEdit()
+        self.file_path_edit.setToolTip("支持拖拽，或粘贴/输入路径")
         self.file_path_edit.fileDropped.connect(self._load_file_preview)
-
         choose_btn = QtWidgets.QPushButton("选择文件")
         choose_btn.clicked.connect(self._choose_file_for_file_tab)
+        file_hint = QtWidgets.QLabel("支持 ZIP/7Z/RAR/GIF/PNG 等，拖入后自动预览前 2KB。")
+        file_hint.setStyleSheet("color: gray;")
+        file_form.addWidget(QtWidgets.QLabel("路径"), 0, 0)
+        file_form.addWidget(self.file_path_edit, 0, 1, 1, 3)
+        file_form.addWidget(choose_btn, 0, 4)
+        file_form.addWidget(file_hint, 1, 1, 1, 3)
 
-        btn_layout = QtWidgets.QHBoxLayout()
-        btn_layout.addWidget(self.file_path_edit, 3)
-        btn_layout.addWidget(choose_btn)
-
-        self.file_preview = QtWidgets.QTextEdit()
-        self.file_preview.setReadOnly(True)
-        self.stego_result = QtWidgets.QTextEdit()
-        self.stego_result.setReadOnly(True)
-
+        # 快捷操作
+        action_group = QtWidgets.QGroupBox("快捷操作")
+        action_layout = QtWidgets.QHBoxLayout(action_group)
         zip_btn = QtWidgets.QPushButton("检测ZIP伪加密")
         zip_btn.clicked.connect(self._run_zip_check)
         binwalk_btn = QtWidgets.QPushButton("Binwalk提取")
         binwalk_btn.clicked.connect(self._run_binwalk)
-        brute_btn = QtWidgets.QPushButton("压缩包爆破")
-        brute_btn.clicked.connect(self._start_arch_bruteforce)
-        self.brute_start_btn = brute_btn
-        cancel_btn = QtWidgets.QPushButton("取消")
-        cancel_btn.clicked.connect(self._cancel_arch_bruteforce)
-        cancel_btn.setEnabled(False)
-        self.brute_cancel_btn = cancel_btn
         ai_stego_btn = QtWidgets.QPushButton("AI 隐写建议")
         ai_stego_btn.clicked.connect(self._run_ai_stego_assist)
-
-        action_layout = QtWidgets.QHBoxLayout()
+        for btn in [zip_btn, binwalk_btn, ai_stego_btn]:
+            btn.setMinimumWidth(110)
         action_layout.addWidget(zip_btn)
         action_layout.addWidget(binwalk_btn)
-        action_layout.addWidget(brute_btn)
-        action_layout.addWidget(cancel_btn)
         action_layout.addWidget(ai_stego_btn)
+        action_layout.addStretch(1)
 
-        brute_opts = QtWidgets.QGridLayout()
-        self.brute_dict = QtWidgets.QLineEdit()
-        self.brute_dict.setPlaceholderText("字典文件（可选）")
-        dict_btn = QtWidgets.QPushButton("选择字典")
-        dict_btn.clicked.connect(self._choose_brute_dict)
-        self.brute_min_len = QtWidgets.QSpinBox()
-        self.brute_min_len.setRange(1, 8)
-        self.brute_min_len.setValue(1)
-        self.brute_max_len = QtWidgets.QSpinBox()
-        self.brute_max_len.setRange(1, 8)
-        self.brute_max_len.setValue(4)
-        self.brute_charset = QtWidgets.QLineEdit()
-        self.brute_charset.setPlaceholderText("自定义字符集（为空则使用数字+小写+可选大写/符号）")
-        self.brute_upper = QtWidgets.QCheckBox("大写")
-        self.brute_symbols = QtWidgets.QCheckBox(f"符号({DEFAULT_SYMBOLS})")
-        self.brute_dict_only = QtWidgets.QCheckBox("仅字典")
-        self.brute_extract = QtWidgets.QCheckBox("成功后解压")
-        self.brute_upper.setChecked(True)
-        self.brute_progress = QtWidgets.QLabel("")
+        # 预览与结果
+        self.file_preview = QtWidgets.QTextEdit()
+        self.file_preview.setReadOnly(True)
+        self.stego_result = QtWidgets.QTextEdit()
+        self.stego_result.setReadOnly(True)
+        preview_group = QtWidgets.QGroupBox("文件预览")
+        preview_layout = QtWidgets.QVBoxLayout(preview_group)
+        preview_layout.addWidget(self.file_preview)
+        result_group = QtWidgets.QGroupBox("结果输出")
+        result_layout = QtWidgets.QVBoxLayout(result_group)
+        result_layout.addWidget(self.stego_result)
 
-        brute_opts.addWidget(QtWidgets.QLabel("字典"), 0, 0)
-        brute_opts.addWidget(self.brute_dict, 0, 1, 1, 2)
-        brute_opts.addWidget(dict_btn, 0, 3)
-        brute_opts.addWidget(QtWidgets.QLabel("长度范围"), 1, 0)
-        brute_opts.addWidget(self.brute_min_len, 1, 1)
-        brute_opts.addWidget(self.brute_max_len, 1, 2)
-        brute_opts.addWidget(self.brute_upper, 2, 0)
-        brute_opts.addWidget(self.brute_symbols, 2, 1)
-        brute_opts.addWidget(self.brute_dict_only, 2, 2)
-        brute_opts.addWidget(self.brute_extract, 2, 3)
-        brute_opts.addWidget(QtWidgets.QLabel("字符集"), 3, 0)
-        brute_opts.addWidget(self.brute_charset, 3, 1, 1, 3)
-        brute_opts.addWidget(QtWidgets.QLabel("进度"), 4, 0)
-        brute_opts.addWidget(self.brute_progress, 4, 1, 1, 3)
+        pane = QtWidgets.QHBoxLayout()
+        pane.addWidget(preview_group, 1)
+        pane.addWidget(result_group, 1)
 
-        layout.addLayout(btn_layout)
-        layout.addLayout(action_layout)
-        layout.addLayout(brute_opts)
-        layout.addWidget(QtWidgets.QLabel("文件预览"))
-        layout.addWidget(self.file_preview, 2)
-        layout.addWidget(QtWidgets.QLabel("结果"))
-        layout.addWidget(self.stego_result, 2)
+        layout.addWidget(file_group)
+        layout.addWidget(action_group)
+        layout.addLayout(pane)
 
         return widget
 
@@ -699,13 +646,22 @@ class MainWindow(QtWidgets.QMainWindow):
     def _load_file_into_input(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "选择文件")
         if path:
-            content = Path(path).read_bytes().decode("latin-1")
+            data = Path(path).read_bytes()
+            guess = detect_encoding_via_file(Path(path))
+            content = decode_bytes_best_effort(data, preferred_encoding=guess)
             self.input_edit.setPlainText(content)
 
     def _load_file_preview(self, path: str) -> None:
         try:
             content = Path(path).read_bytes()
-            self.file_preview.setPlainText(content[:2048].decode("latin-1", errors="ignore"))
+            guess = detect_encoding_via_file(Path(path))
+            self.file_preview.setPlainText(
+                decode_bytes_best_effort(
+                    content[:2048],
+                    preferred_encoding=guess,
+                    encodings=["utf-8", "gb18030", "big5", "shift_jis", "cp1252", "latin-1"],
+                )
+            )
         except Exception as exc:  # pragma: no cover - GUI feedback
             self.file_preview.setPlainText(f"无法读取文件: {exc}")
 
@@ -730,79 +686,6 @@ class MainWindow(QtWidgets.QMainWindow):
             self._auto_analyze_file(file_path)
 
     # -------- Archive brute-force --------
-    def _choose_brute_dict(self) -> None:
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "选择字典文件")
-        if path:
-            self.brute_dict.setText(path)
-
-    def _start_arch_bruteforce(self) -> None:
-        path = self.file_path_edit.text().strip()
-        if not path:
-            self.stego_result.setPlainText("请选择压缩包文件")
-            return
-        min_len = self.brute_min_len.value()
-        max_len = self.brute_max_len.value()
-        if max_len < min_len:
-            self.stego_result.setPlainText("最大长度不能小于最小长度")
-            return
-        if hasattr(self, "arch_worker") and self.arch_worker.isRunning():  # type: ignore[attr-defined]
-            self.stego_result.setPlainText("任务已在进行中")
-            return
-
-        self.stego_result.setPlainText("开始爆破...\n")
-        self.brute_start_btn.setEnabled(False)
-        self.brute_cancel_btn.setEnabled(True)
-        self.brute_progress.setText("准备中...")
-        self.arch_worker = ArchiveBruteWorker(
-            path,
-            self.brute_dict.text().strip(),
-            self.brute_dict_only.isChecked(),
-            min_len,
-            max_len,
-            self.brute_charset.text().strip(),
-            self.brute_upper.isChecked(),
-            self.brute_symbols.isChecked(),
-            self.brute_extract.isChecked(),
-            self,
-        )
-        self.arch_worker.progress.connect(self._handle_arch_progress)
-        self.arch_worker.finished.connect(self._handle_arch_finished)
-        self.arch_worker.error.connect(self._handle_arch_error)
-        self.arch_worker.start()
-
-    def _cancel_arch_bruteforce(self) -> None:
-        if hasattr(self, "arch_worker") and self.arch_worker.isRunning():  # type: ignore[attr-defined]
-            self.arch_worker.cancel()
-            self.brute_progress.setText("请求取消...")
-            self.brute_cancel_btn.setEnabled(False)
-
-    def _handle_arch_progress(self, msg: str) -> None:
-        self.brute_progress.setText(msg)
-
-    def _handle_arch_finished(self, result: object, cancelled: bool) -> None:
-        self.brute_start_btn.setEnabled(True)
-        self.brute_cancel_btn.setEnabled(False)
-        if cancelled:
-            self.stego_result.append("已取消任务")
-            self.brute_progress.setText("已取消")
-            return
-        if result:
-            res = result
-            msg = f"成功，密码: {res.password} (尝试 {res.attempts} 次)"  # type: ignore[attr-defined]
-            if getattr(res, "extracted_to", None):
-                msg += f"；已解压到 {res.extracted_to}"
-            self.stego_result.append(msg)
-            self.brute_progress.setText("完成")
-        else:
-            self.stego_result.append("未找到有效密码")
-            self.brute_progress.setText("完成")
-
-    def _handle_arch_error(self, msg: str) -> None:
-        self.brute_start_btn.setEnabled(True)
-        self.brute_cancel_btn.setEnabled(False)
-        self.brute_progress.setText("错误")
-        self.stego_result.append(f"错误: {msg}")
-
     def _auto_analyze_text(self, text: str) -> None:
         lines = []
         lines.append("[文本探测]")
@@ -930,9 +813,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 codecs = base_registry()
                 enc, dec = codecs[variant]
                 if mode == "encode":
-                    output = enc(text.encode("latin-1"))
+                    output = enc(text.encode("utf-8", errors="replace"))
                 else:
-                    output = dec(text).decode("latin-1")
+                    output = decode_bytes_best_effort(dec(text))
             self.output_edit.setPlainText(str(output))
         except Exception as exc:  # pragma: no cover - GUI feedback
             self.output_edit.setPlainText(f"错误: {exc}")

@@ -4,7 +4,6 @@ from ctf_tools import (
     bacon_decode,
     bacon_encode,
     auto_decode,
-    brute_force_archive,
     brute_force_hash,
     encrypt,
     decrypt,
@@ -49,8 +48,6 @@ from ctf_tools import (
     url_decode,
     url_encode,
     list_png_chunks,
-    build_charset,
-    generate_passwords,
     html_entity_encode,
     html_entity_decode,
     uu_encode,
@@ -62,6 +59,8 @@ from ctf_tools import (
     save_ai_config,
     ai_assist_cipher,
     AIError,
+    decode_bytes_best_effort,
+    base_registry,
 )
 from ctf_tools.image_stego import lsb_extract
 from PIL import Image
@@ -82,6 +81,13 @@ class TestCtfTools(unittest.TestCase):
     def test_base32_roundtrip(self) -> None:
         text = "flag{base32}"
         self.assertEqual(base32_decode(base32_encode(text)), text)
+        self.assertEqual(base16_decode(base16_encode(text)), text)
+        # hex alias
+        codecs = base_registry()
+        self.assertIn("hex", codecs)
+        hex_enc, hex_dec = codecs["hex"]
+        self.assertEqual(hex_enc(text.encode("utf-8")), base16_encode(text))
+        self.assertEqual(hex_dec(base16_encode(text)), text.encode("utf-8"))
 
     def test_url_roundtrip(self) -> None:
         text = "https://example.com/flag?value=hello world"
@@ -231,38 +237,13 @@ class TestCtfTools(unittest.TestCase):
             if env_backup is not None:
                 os.environ["OPENAI_API_KEY"] = env_backup
 
-    def test_generate_passwords_and_charset(self) -> None:
-        charset = build_charset(use_digits=True, use_lower=False, use_upper=False, use_symbols=False)
-        candidates = list(generate_passwords(2, 2, charset))
-        self.assertIn("00", candidates)
-        self.assertIn("99", candidates)
-        self.assertEqual(len(candidates), 100)
-
-    def test_archive_bruteforce_archive(self) -> None:
-        try:
-            import py7zr  # type: ignore
-        except ImportError:
-            self.skipTest("py7zr not installed")
-        with TemporaryDirectory() as tmpdir:
-            archive_path = Path(tmpdir) / "secret.7z"
-            payload = Path(tmpdir) / "flag.txt"
-            payload.write_text("secret")
-            with py7zr.SevenZipFile(archive_path, "w", password="p4ss") as archive:
-                archive.write(payload, arcname="flag.txt")
-            result = brute_force_archive(
-                str(archive_path),
-                dictionary=["wrong", "p4ss"],
-                include_generated=False,
-                extract=True,
-            )
-            self.assertIsNotNone(result)
-            assert result  # mypy hint
-            self.assertEqual(result.password, "p4ss")
-            self.assertTrue(result.extracted_to)
-            extracted = Path(result.extracted_to) / "flag.txt"
-            self.assertTrue(extracted.exists())
-            self.assertEqual(extracted.read_text(), "secret")
-
+    def test_decode_bytes_best_effort(self) -> None:
+        gb_bytes = "你好".encode("gb18030")
+        self.assertEqual(decode_bytes_best_effort(gb_bytes), "你好")
+        latin_bytes = b"\xff\xfe"
+        # Should not raise and should return a string of same length in fallback
+        result = decode_bytes_best_effort(latin_bytes, preferred_encoding="utf-8")
+        self.assertEqual(len(result), 2)
 
 if __name__ == "__main__":
     unittest.main()

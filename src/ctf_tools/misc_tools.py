@@ -4,6 +4,7 @@ import binascii
 from typing import Dict, Literal, Optional, Tuple
 
 from .modern_crypto import DataFormat, _load_bytes
+from .utils import decode_bytes_best_effort
 
 BASE_ALLOWED = {2, 8, 10, 16}
 PRINTABLE_ASCII = "".join(chr(i) for i in range(32, 127))
@@ -196,7 +197,7 @@ def uu_decode(data: str, output_format: DataFormat = "utf8") -> str:
 
 def hex_to_ascii(hex_str: str) -> str:
     """Convert hex string to ASCII text."""
-    return bytes.fromhex(hex_str).decode("latin-1")
+    return decode_bytes_best_effort(bytes.fromhex(hex_str))
 
 
 def bin_to_ascii(bin_str: str) -> str:
@@ -205,7 +206,7 @@ def bin_to_ascii(bin_str: str) -> str:
     if len(cleaned) % 8 != 0:
         raise ValueError("Binary string length must be a multiple of 8.")
     bytes_list = [int(cleaned[i : i + 8], 2) for i in range(0, len(cleaned), 8)]
-    return bytes(bytes_list).decode("latin-1")
+    return decode_bytes_best_effort(bytes(bytes_list))
 
 
 def xor_bytes(data: bytes, key: bytes) -> bytes:
