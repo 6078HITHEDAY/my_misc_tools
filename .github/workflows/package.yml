@@ -9,6 +9,9 @@ on:
 env:
   PKG_VERSION: 0.1.0
 
+permissions:
+  contents: read
+
 jobs:
   linux:
     runs-on: ubuntu-latest
