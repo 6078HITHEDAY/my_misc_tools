@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ctf-tools"
+version = "0.1.0"
+description = "Lightweight CTF helper toolkit with CLI and PyQt5 GUI."
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "cryptography",
+    "pycryptodome",
+    "PyQt5",
+    "binwalk",
+    "Pillow",
+    "pyzbar",
+    "py7zr",
+    "rarfile",
+    "requests",
+]
+
+[project.scripts]
+ctf-tools = "ctf_tools.main:main"
+ctf-tools-gui = "ctf_tools.gui:run_gui"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

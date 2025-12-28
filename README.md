@@ -45,6 +45,7 @@ PYTHONPATH=src python3 -m ctf_tools base decode "ZmxhZw=="
 - 增补隐写与文件分析：扩展常见文件格式探测，增加图片/音频简单探针。
 - AI 联动：补充不同 provider 的示例调用与容错提示。
 - 交互优化：GUI 主题/布局微调，CLI 子命令示例与错误提示更友好。
+- 打包发布：GitHub Actions 自动构建 deb / Flatpak / AppImage / Windows exe（见 `.github/workflows/package.yml`）。
 
 ## 再开发指南
 1) 环境：Python 3.8+，`python3 -m venv venv && source venv/bin/activate`，再执行 `python3 -m pip install -r requirements.txt`。
