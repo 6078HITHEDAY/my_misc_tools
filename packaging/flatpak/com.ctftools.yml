@@ -8,7 +8,8 @@ finish-args:
   - --socket=x11
   - --socket=wayland
   - --device=dri
-  - --filesystem=home:ro
+  - --filesystem=xdg-documents
+  - --filesystem=xdg-download
 modules:
   - name: ctf-tools
     buildsystem: simple
