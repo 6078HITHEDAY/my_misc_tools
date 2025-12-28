@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=CTF Tools
+Comment=Lightweight CTF helper toolkit
+Exec=ctf-tools-gui
+Icon=ctf-tools
+Categories=Utility;Security;

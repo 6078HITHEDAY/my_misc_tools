@@ -1,0 +1,95 @@
+name: Build packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+env:
+  PKG_VERSION: 0.1.0
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller build
+      - name: Build binaries
+        run: |
+          pyinstaller --name ctf-tools --onefile src/ctf_tools/main.py
+          pyinstaller --name ctf-tools-gui --onefile --noconsole src/ctf_tools/gui.py
+      - name: Build deb package
+        run: |
+          VERSION=${PKG_VERSION}
+          mkdir -p build/deb/ctf-tools/DEBIAN
+          cat > build/deb/ctf-tools/DEBIAN/control <<EOF
+          Package: ctf-tools
+          Version: ${VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: 6078HITHEDAY <87463573+6078HITHEDAY@users.noreply.github.com>
+          Description: Lightweight CTF helper toolkit with CLI and GUI
+          EOF
+          install -Dm755 dist/ctf-tools build/deb/ctf-tools/usr/bin/ctf-tools
+          install -Dm755 dist/ctf-tools-gui build/deb/ctf-tools/usr/bin/ctf-tools-gui
+          dpkg-deb --build build/deb/ctf-tools dist/ctf-tools_${VERSION}_amd64.deb
+      - name: Build AppImage
+        run: |
+          APPDIR=$PWD/build/AppDir
+          mkdir -p "$APPDIR"/usr/bin "$APPDIR"/usr/share/applications
+          cp dist/ctf-tools-gui "$APPDIR/usr/bin/ctf-tools-gui"
+          cp packaging/appimage/ctf-tools.desktop "$APPDIR/usr/share/applications/ctf-tools.desktop"
+          cp packaging/appimage/AppRun "$APPDIR/AppRun"
+          chmod +x "$APPDIR/AppRun"
+          mkdir -p dist
+          APPIMG_VERSION="13"
+          APPIMG_URL="https://github.com/AppImage/AppImageKit/releases/download/${APPIMG_VERSION}/appimagetool-x86_64.AppImage"
+          APPIMG_SHA="0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5"
+          # SHA corresponds to appimagetool ${APPIMG_VERSION}
+          curl -L -o appimagetool "$APPIMG_URL"
+          echo "${APPIMG_SHA}  appimagetool" | sha256sum -c -
+          chmod +x appimagetool
+          ./appimagetool "$APPDIR" dist/ctf-tools_${PKG_VERSION}.AppImage
+      - name: Build Flatpak bundle
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak-builder --install-deps-from=flathub --repo=build-repo build-dir packaging/flatpak/com.ctftools.yml
+          flatpak build-bundle build-repo dist/ctf-tools_${PKG_VERSION}.flatpak com.ctftools.App
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            dist/ctf-tools*
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+      - name: Build executables
+        shell: bash
+        run: |
+          pyinstaller --name ctf-tools --onefile src/ctf_tools/main.py
+          pyinstaller --name ctf-tools-gui --onefile --noconsole src/ctf_tools/gui.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: dist/*.exe
