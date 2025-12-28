@@ -1,7 +1,7 @@
 # my_masic_tools · CTF Tools / CTF 工具箱
 
 轻量级、模块化的 CTF 工具集，涵盖常见编码/经典密码、对称加密、隐写与弱口令爆破，提供 PyQt5 图形界面与 argparse 命令行两种入口。
-
+## 正在完整中────
 ## 快速开始
 - 环境要求：Python 3.8+，`pip`；GUI 需要可用的图形环境。部分功能依赖系统工具：QR 解码需安装 zbar，Binwalk 提取需 `binwalk`。
 - 安装（推荐先建虚拟环境）
