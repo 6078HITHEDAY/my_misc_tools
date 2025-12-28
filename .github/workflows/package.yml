@@ -35,7 +35,7 @@ jobs:
           Section: utils
           Priority: optional
           Architecture: amd64
-          Maintainer: CTF Tools <noreply@example.com>
+          Maintainer: 6078HITHEDAY <6078HITHEDAY@users.noreply.github.com>
           Description: Lightweight CTF helper toolkit with CLI and GUI
           EOF
           install -Dm755 dist/ctf-tools build/deb/ctf-tools/usr/bin/ctf-tools
@@ -49,9 +49,8 @@ jobs:
           cp packaging/appimage/ctf-tools.desktop "$APPDIR/usr/share/applications/ctf-tools.desktop"
           cp packaging/appimage/AppRun "$APPDIR/AppRun"
           chmod +x "$APPDIR/AppRun"
-          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
-          chmod +x appimagetool
-          ./appimagetool "$APPDIR" dist/ctf-tools_${PKG_VERSION}.AppImage
+          mkdir -p dist
+          docker run --rm -v "$APPDIR":/AppDir -v "$PWD/dist":/out appimagecrafters/appimagetool:latest /AppDir /out/ctf-tools_${PKG_VERSION}.AppImage
       - name: Build Flatpak bundle
         run: |
           sudo apt-get update
