@@ -35,7 +35,7 @@ jobs:
           Section: utils
           Priority: optional
           Architecture: amd64
-          Maintainer: CTF Tools Maintainers <maintainers@ctf-tools.local>
+          Maintainer: CTF Tools Maintainers <ctf-tools@users.noreply.github.com>
           Description: Lightweight CTF helper toolkit with CLI and GUI
           EOF
           install -Dm755 dist/ctf-tools build/deb/ctf-tools/usr/bin/ctf-tools
@@ -50,7 +50,8 @@ jobs:
           cp packaging/appimage/AppRun "$APPDIR/AppRun"
           chmod +x "$APPDIR/AppRun"
           mkdir -p dist
-          APPIMG_URL="https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage"
+          APPIMG_VERSION="13"
+          APPIMG_URL="https://github.com/AppImage/AppImageKit/releases/download/${APPIMG_VERSION}/appimagetool-x86_64.AppImage"
           APPIMG_SHA="0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5"
           curl -L -o appimagetool "$APPIMG_URL"
           echo "${APPIMG_SHA}  appimagetool" | sha256sum -c -
@@ -61,7 +62,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y flatpak flatpak-builder
           flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          flatpak-builder --force-clean --install-deps-from=flathub --repo=build-repo build-dir packaging/flatpak/com.ctftools.yml
+          flatpak-builder --install-deps-from=flathub --repo=build-repo build-dir packaging/flatpak/com.ctftools.yml
           flatpak build-bundle build-repo dist/ctf-tools_${PKG_VERSION}.flatpak com.ctftools.App
       - uses: actions/upload-artifact@v4
         with:
